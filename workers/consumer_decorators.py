@@ -6,6 +6,7 @@ import traceback
 from functools import wraps
 from typing import Callable, Any
 from channels.layers import get_channel_layer
+from django.utils.timezone import now
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ def _handle_task_error(
 
 def _examine_task(func, *args):
     """Helper function to extract channel name and message from task."""
+    assert args[0].scope['type'] == 'channel', "These decorators can only be used on background tasks"
     channel_name = args[0].scope['channel']
     message = args[1] if len(args) > 1 else {}
     current_retries = message.get('retries', 0)
@@ -99,3 +101,93 @@ def requeue_task(max_retries: int = 3, delay: int = 10) -> Callable:
         return async_wrapper if is_async else sync_wrapper
 
     return decorator
+
+
+def run_continously(interval: int) -> Callable:
+    """
+    A decorator to run a function periodically. Useful for setting up a periodic task like a cron job.
+
+    Please note that if the function passed to it raises an exception, the scheduler will stop running
+    immediately.
+    :param interval: Minimum interval between two successive runs of the function
+    :return:
+    """
+
+    def decorator(func: Callable) -> Callable:
+        is_async = inspect.iscoroutinefunction(func)
+
+        @wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            channel_name, _, message = _examine_task(func, *args)
+            while True:
+                try:
+                    message["last_run"] = now()
+                    await func(*args, **kwargs)
+                    message["last_run_successful"] = True
+                    if (now() - message["last_run"]).total_seconds() < interval:
+                        await asyncio.sleep(int(interval - (now() - message["last_run"]).total_seconds()) + 1)
+                    else:
+                        await get_channel_layer().send(channel_name, message)
+                        break
+                except Exception as e:
+                    logger.error(f"Error occurred in function {func.__name__}: {e}. Exiting scheduler")
+                    break
+
+
+        @wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            channel_name, _, message = _examine_task(func, *args)
+            while True:
+                try:
+                    message["last_run"] = now()
+                    func(*args, **kwargs)
+                    message["last_run_successful"] = True
+                    if (now() - message["last_run"]).total_seconds() < interval:
+                        time.sleep(int(interval - (now() - message["last_run"]).total_seconds()) + 1)
+                    else:
+                        asyncio.run(get_channel_layer().send(channel_name, message))
+                        break
+                except Exception as e:
+                    logger.error(f"Error occurred in function {func.__name__}: {e}. Exiting scheduler")
+                    break
+
+        return async_wrapper if is_async else sync_wrapper
+
+    return decorator
+
+
+def rate_limiter(min_time_between_runs=1) -> Callable:
+    """
+    Limits how frequency a task can be run. Stores the last run
+    time stamp in the consumer class.
+    :param min_time_between_runs: in seconds
+    :return:
+    """
+    def decorator(func: Callable) -> Callable:
+        is_async = inspect.iscoroutinefunction(func)
+
+        @wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            consumer = args[0]
+            last_run = getattr(consumer, f"last_run__{func.__name__}", None)
+            if last_run is not None:
+                if (now() - last_run).total_seconds() < min_time_between_runs:
+                    logger.info(f"Task {func.__name__} is rate limited. Sleeping for {min_time_between_runs - (now() - last_run).total_seconds()} seconds")
+                    await asyncio.sleep(min_time_between_runs - (now() - last_run).total_seconds())
+            setattr(consumer, f"last_run__{func.__name__}", now())
+            return await func(*args, **kwargs)
+
+        @wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            consumer = args[0]
+            last_run = getattr(consumer, f"last_run__{func.__name__}", None)
+            if last_run is not None:
+                if (now() - last_run).total_seconds() < min_time_between_runs:
+                    logger.info(f"Task {func.__name__} is rate limited. Sleeping for {min_time_between_runs - (now() - last_run).total_seconds()} seconds")
+                    time.sleep(min_time_between_runs - (now() - last_run).total_seconds())
+            setattr(consumer, f"last_run__{func.__name__}", now())
+            return func(*args, **kwargs)
+
+        return async_wrapper if is_async else sync_wrapper
+    return decorator
+

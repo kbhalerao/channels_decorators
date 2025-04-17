@@ -13,7 +13,8 @@ from django.core.asgi import get_asgi_application
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'consumer_helpers.settings')
 
-from workers.consumers import PrintSyncConsumer, PrintAsyncConsumer
+from workers.consumers import PrintSyncConsumer, PrintAsyncConsumer, RepeatedAsyncExecutor, RepeatedSyncExecutor, \
+    RateLimitedAsyncExecutor, RateLimitedExecutor
 from channels.routing import ProtocolTypeRouter, ChannelNameRouter
 
 application = ProtocolTypeRouter({
@@ -21,5 +22,9 @@ application = ProtocolTypeRouter({
     "channel": ChannelNameRouter({
         "print-consumer": PrintSyncConsumer.as_asgi(),
         "aprint-consumer": PrintAsyncConsumer.as_asgi(),
+        "arepeat": RepeatedAsyncExecutor.as_asgi(),
+        "repeat": RepeatedSyncExecutor.as_asgi(),
+        "throttle": RateLimitedExecutor.as_asgi(),
+        "athrottle": RateLimitedAsyncExecutor.as_asgi(),
     }),
 })
