@@ -1,0 +1,12 @@
+[project]
+name = "consumer-helpers"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.9"
+dependencies = [
+    "channels-redis>=4.2.1",
+    "channels[daphne]>=4.2.2",
+    "django>=4.2.20",
+    "pytest-asyncio>=0.26.0",
+    "pytest-django>=4.11.1",
+]
